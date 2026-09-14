@@ -22,8 +22,8 @@ def get_vision():
     return Vision()
 
 @st.cache_resource
-def get_engine(db):
-    return EventEngine(db)
+def get_engine(_db):
+    return EventEngine(_db)
 
 db     = get_db()
 vision = get_vision()
