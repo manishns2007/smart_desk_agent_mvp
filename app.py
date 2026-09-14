@@ -12,7 +12,8 @@ st.set_page_config(page_title="Smart Desk Agent", layout="wide")
 st.title("🧠 Smart Desk / Productivity Agent")
 st.caption("Laptop camera → vision → event memory → natural-language queries")
 
-# ── Singletons: survive across Streamlit reruns ─────────────────────────────
+# ── Singletons: survive across Streamlit reruns ──────────────────────────────
+
 @st.cache_resource
 def get_db():
     return EventDB()
@@ -25,42 +26,56 @@ def get_vision():
 def get_engine(_db):
     return EventEngine(_db)
 
-db     = get_db()
-vision = get_vision()
-engine = get_engine(db)
+class FrameStore:
+    """Thread-safe container for the latest camera frame."""
+    def __init__(self):
+        self.frame  = None   # numpy RGB array
+        self.labels = []
+        self.lock   = threading.Lock()
+        self.running = False
+        self.stop_event = threading.Event()
 
-# ── Session state ────────────────────────────────────────────────────────────
-if "running" not in st.session_state:
-    st.session_state.running = False
-if "latest_frame" not in st.session_state:
-    st.session_state.latest_frame = None
-if "latest_labels" not in st.session_state:
-    st.session_state.latest_labels = []
+    def write(self, frame, labels):
+        with self.lock:
+            self.frame  = frame
+            self.labels = labels
+
+    def read(self):
+        with self.lock:
+            return self.frame, list(self.labels)
+
+@st.cache_resource
+def get_frame_store():
+    return FrameStore()
+
+db          = get_db()
+vision      = get_vision()
+engine      = get_engine(db)
+frame_store = get_frame_store()
 
 # ── Background camera thread ─────────────────────────────────────────────────
-_stop_event = threading.Event()
 
 def _camera_loop():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        st.session_state.running = False
+        frame_store.running = False
         return
     try:
-        while not _stop_event.is_set():
+        while not frame_store.stop_event.is_set():
             ok, frame = cap.read()
             if not ok:
                 break
             labels, annotated = vision.process(frame)
             engine.update(labels)
             frame_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-            st.session_state.latest_frame  = frame_rgb
-            st.session_state.latest_labels = labels
-            time.sleep(0.1)
+            frame_store.write(frame_rgb, labels)
+            time.sleep(0.05)
     finally:
         cap.release()
-        st.session_state.running = False
+        frame_store.running = False
 
 # ── Layout ───────────────────────────────────────────────────────────────────
+
 col1, col2 = st.columns([2, 1])
 
 with col1:
@@ -68,14 +83,12 @@ with col1:
     frame_box  = st.empty()
     status_box = st.empty()
 
-    if st.session_state.latest_frame is not None:
-        frame_box.image(
-            st.session_state.latest_frame,
-            channels="RGB",
-            width='stretch',
-        )
-        labels = st.session_state.latest_labels
+    frame, labels = frame_store.read()
+    if frame is not None:
+        frame_box.image(frame, channels="RGB", width="stretch")
         status_box.info("Detected: " + (", ".join(labels) if labels else "nothing"))
+    elif not frame_store.running:
+        frame_box.info("Camera not started.")
 
 with col2:
     st.subheader("Ask the agent")
@@ -103,19 +116,20 @@ with col2:
             st.success(f"Latest relevant event: **{latest[1]}** at **{latest[0]}**")
             st.dataframe(
                 pd.DataFrame(rows, columns=["Time", "Event"]),
-                width='stretch',
+                width="stretch",
                 hide_index=True,
             )
         else:
             st.info("I don't have a matching event yet.")
 
 # ── Event memory ─────────────────────────────────────────────────────────────
+
 st.subheader("Event memory")
 rows = db.recent(30)
 if rows:
     st.dataframe(
         pd.DataFrame(rows, columns=["Time", "Event"]),
-        width='stretch',
+        width="stretch",
         hide_index=True,
     )
 else:
@@ -124,25 +138,24 @@ else:
 st.divider()
 
 # ── Controls ─────────────────────────────────────────────────────────────────
-start_btn = st.button("▶ Start camera", type="primary", disabled=st.session_state.running)
-stop_btn  = st.button("⏹ Stop camera",  disabled=not st.session_state.running)
 
-if start_btn and not st.session_state.running:
-    _stop_event.clear()
-    st.session_state.running = True
+start_btn = st.button("▶ Start camera", type="primary", disabled=frame_store.running)
+stop_btn  = st.button("⏹ Stop camera",  disabled=not frame_store.running)
+
+if start_btn and not frame_store.running:
+    frame_store.stop_event.clear()
+    frame_store.running = True
     t = threading.Thread(target=_camera_loop, daemon=True)
     t.start()
     st.rerun()
 
-if stop_btn and st.session_state.running:
-    _stop_event.set()
-    st.session_state.running = False
+if stop_btn and frame_store.running:
+    frame_store.stop_event.set()
+    frame_store.running = False
     st.rerun()
 
-if st.session_state.running:
-    # Auto-refresh every second to show latest frame
-    time.sleep(1)
+# ── Auto-refresh while camera is live ────────────────────────────────────────
+
+if frame_store.running:
+    time.sleep(0.5)
     st.rerun()
-else:
-    if st.session_state.latest_frame is None:
-        st.info("Click **Start camera** to begin observing the desk.")
