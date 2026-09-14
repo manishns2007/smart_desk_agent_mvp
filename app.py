@@ -7,6 +7,7 @@ import pandas as pd
 from database import EventDB
 from event_engine import EventEngine
 from vision import Vision
+from query_engine import answer as agent_answer
 
 st.set_page_config(page_title="Smart Desk Agent", layout="wide")
 st.title("🧠 Smart Desk / Productivity Agent")
@@ -92,35 +93,23 @@ with col1:
 
 with col2:
     st.subheader("Ask the agent")
-    question = st.text_input("Question", placeholder="When did I last use my phone?")
+    question = st.text_input(
+        "Question",
+        placeholder="How many times did I leave between 19:00 to 19:05?"
+    )
 
     if question:
-        q = question.lower()
-        if "phone" in q:
-            rows = db.search("phone", 10)
-        elif "laptop" in q:
-            rows = db.search("laptop", 10)
-        elif "cup" in q or "drink" in q:
-            rows = db.search("cup", 10)
-        elif "book" in q or "write" in q:
-            rows = db.search("book", 10)
-        elif "enter" in q or "arrive" in q:
-            rows = db.search("arrived", 10)
-        elif "leave" in q or "away" in q:
-            rows = db.search("left", 10)
-        else:
-            rows = db.recent(10)
+        result = agent_answer(question, db)
+        st.success(result["answer"])
 
-        if rows:
-            latest = rows[0]
-            st.success(f"Latest relevant event: **{latest[1]}** at **{latest[0]}**")
+        if result["rows"]:
             st.dataframe(
-                pd.DataFrame(rows, columns=["Time", "Event"]),
+                pd.DataFrame(result["rows"], columns=["Time", "Event"]),
                 width="stretch",
                 hide_index=True,
             )
         else:
-            st.info("I don't have a matching event yet.")
+            st.info("No supporting events to display.")
 
 # ── Event memory ─────────────────────────────────────────────────────────────
 
