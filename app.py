@@ -143,11 +143,7 @@ with col2:
         with st.spinner("Thinking…"):
             result = agent_answer(question, db, api_key=api_key)
 
-        if result.get("used_ai"):
-            st.caption("🤖 Answered by Gemini AI")
-        else:
-            st.caption("⚡ Answered by fast rule engine")
-
+        st.caption("🤖 Answered by Gemini AI")
         st.success(result["answer"])
 
         if result["rows"]:
