@@ -1,0 +1,22 @@
+# ── Database (private, machine-specific) ─────────────────────────────────────
+events.db
+
+# ── YOLO model weights (large binaries, auto-downloaded on first run) ─────────
+*.pt
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── OS / editor junk ──────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

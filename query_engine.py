@@ -25,17 +25,25 @@ def _gemini_answer(question: str, context_text: str, api_key: str) -> str:
         client = genai.Client(api_key=api_key)
 
         system_prompt = (
-            "You are a smart desk monitoring assistant. "
-            "Answer questions based ONLY on the desk event log below. "
-            "Be concise, factual, and friendly. "
-            "If there is not enough data in the log to answer, say so clearly. "
-            "Do not make up events that are not in the log.\n\n"
+            "You are a smart desk productivity assistant that analyses a user's desk activity log "
+            "and gives clear, opinionated answers.\n\n"
+            "PRODUCTIVITY RUBRIC (use this to judge sessions):\n"
+            "• PRODUCTIVE signals: laptop present for long stretches, person consistently at desk, "
+            "minimal phone interactions, few/short desk absences.\n"
+            "• UNPRODUCTIVE signals: frequent or long desk absences, many phone interactions "
+            "(especially in clusters), phone detected without laptop, very short bursts of desk presence.\n"
+            "• MIXED: some focused time interrupted by distractions.\n\n"
+            "RULES:\n"
+            "1. Always give a clear verdict: PRODUCTIVE, UNPRODUCTIVE, or MIXED — do NOT just summarise.\n"
+            "2. Back the verdict with 2-3 specific observations from the log (times + events).\n"
+            "3. Be concise and direct. One verdict line, then bullet-point evidence.\n"
+            "4. If the log has too little data, say so and give a best-guess verdict anyway.\n\n"
             "DESK EVENT LOG (most recent first):\n"
             f"{context_text}"
         )
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.6-flash",
             contents=question,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,

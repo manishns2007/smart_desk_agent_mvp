@@ -20,7 +20,7 @@ with st.sidebar:
     api_key = st.text_input(
         "Gemini API Key",
         type="password",
-        placeholder="AIza...",
+        placeholder="AQ...",
         help="Get a free key at https://aistudio.google.com/app/apikey",
     )
     if api_key:
@@ -58,9 +58,9 @@ def get_engine(_db):
 class FrameStore:
     """Thread-safe container for the latest camera frame."""
     def __init__(self):
-        self.frame  = None   # numpy RGB array
-        self.labels = []
-        self.lock   = threading.Lock()
+        self.frame   = None   # numpy RGB array, or None when stopped
+        self.labels  = []
+        self.lock    = threading.Lock()
         self.running = False
         self.stop_event = threading.Event()
 
@@ -68,6 +68,12 @@ class FrameStore:
         with self.lock:
             self.frame  = frame
             self.labels = labels
+
+    def clear(self):
+        """Erase the last frame so the feed goes blank on stop."""
+        with self.lock:
+            self.frame  = None
+            self.labels = []
 
     def read(self):
         with self.lock:
@@ -98,26 +104,33 @@ def _camera_loop():
             engine.update(labels)
             frame_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
             frame_store.write(frame_rgb, labels)
-            time.sleep(0.05)
+            time.sleep(0.1)   # ~10 fps — enough for desk monitoring, lighter on CPU
     finally:
         cap.release()
+        frame_store.clear()   # blank the feed when thread exits
         frame_store.running = False
 
 # ── Layout ───────────────────────────────────────────────────────────────────
 
 col1, col2 = st.columns([2, 1])
 
+# Camera column — refreshes independently via @st.fragment so the Q&A panel
+# and event table don't rerender on every tick.
 with col1:
     st.subheader("Live camera")
-    frame_box  = st.empty()
-    status_box = st.empty()
 
-    frame, labels = frame_store.read()
-    if frame is not None:
-        frame_box.image(frame, channels="RGB", width="stretch")
-        status_box.info("Detected: " + (", ".join(labels) if labels else "nothing"))
-    elif not frame_store.running:
-        frame_box.info("Camera not started.")
+    @st.fragment(run_every=1)   # refresh this block every 1 s while camera is on
+    def _camera_panel():
+        frame, labels = frame_store.read()
+        if frame_store.running and frame is not None:
+            st.image(frame, channels="RGB", width='stretch')
+            st.info("Detected: " + (", ".join(labels) if labels else "nothing"))
+        elif frame_store.running:
+            st.info("⏳ Starting camera…")
+        else:
+            st.info("📷 Camera stopped. Press **▶ Start camera** below.")
+
+    _camera_panel()
 
 with col2:
     st.subheader("Ask the agent")
@@ -130,7 +143,6 @@ with col2:
         with st.spinner("Thinking…"):
             result = agent_answer(question, db, api_key=api_key)
 
-        # Badge to show whether AI was used
         if result.get("used_ai"):
             st.caption("🤖 Answered by Gemini AI")
         else:
@@ -141,7 +153,7 @@ with col2:
         if result["rows"]:
             st.dataframe(
                 pd.DataFrame(result["rows"], columns=["Time", "Event"]),
-                width="stretch",
+                width='stretch',
                 hide_index=True,
             )
         else:
@@ -149,16 +161,21 @@ with col2:
 
 # ── Event memory ─────────────────────────────────────────────────────────────
 
-st.subheader("Event memory")
-rows = db.recent(30)
-if rows:
-    st.dataframe(
-        pd.DataFrame(rows, columns=["Time", "Event"]),
-        width="stretch",
-        hide_index=True,
-    )
-else:
-    st.info("No events recorded yet.")
+@st.fragment(run_every=5)
+def _event_memory_panel():
+    st.subheader("Event memory")
+    rows = db.recent(30)
+    if rows:
+        st.dataframe(
+            pd.DataFrame(rows, columns=["Time", "Event"]),
+            width='stretch',
+            hide_index=True,
+        )
+    else:
+        st.info("No events recorded yet.")
+
+_event_memory_panel()
+
 
 st.divider()
 
@@ -177,10 +194,5 @@ if start_btn and not frame_store.running:
 if stop_btn and frame_store.running:
     frame_store.stop_event.set()
     frame_store.running = False
-    st.rerun()
-
-# ── Auto-refresh while camera is live ────────────────────────────────────────
-
-if frame_store.running:
-    time.sleep(0.5)
+    frame_store.clear()   # immediately blank the feed, don't wait for thread
     st.rerun()
