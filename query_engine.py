@@ -1,19 +1,61 @@
 """
 query_engine.py – Natural-language query interpreter for Smart Desk Agent.
 
-Understands:
+Understands (fast regex paths – no API call):
   - Time ranges  : "between 19:00 to 19:05", "from 18:50 to 19:00"
   - Counts        : "how many times", "how often"
   - Last-seen     : "when did i last", "last time"
   - Duration      : "how long was i", "how long did i"
   - Topic keywords: person / phone / laptop / cup / book / left / arrived
+
+Freeform / complex questions fall through to Google Gemini Flash.
 """
 
 import re
 from datetime import datetime, date
 
+# ── Gemini client (lazy-initialised per call) ─────────────────────────────────
+
+def _gemini_answer(question: str, context_text: str, api_key: str) -> str:
+    """Send question + event context to Gemini and return the answer string."""
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        system_prompt = (
+            "You are a smart desk monitoring assistant. "
+            "Answer questions based ONLY on the desk event log below. "
+            "Be concise, factual, and friendly. "
+            "If there is not enough data in the log to answer, say so clearly. "
+            "Do not make up events that are not in the log.\n\n"
+            "DESK EVENT LOG (most recent first):\n"
+            f"{context_text}"
+        )
+
+        response = model.generate_content(f"{system_prompt}\n\nQuestion: {question}")
+        return response.text.strip()
+    except ImportError:
+        return "⚠️ google-generativeai is not installed. Run: pip install google-generativeai"
+    except Exception as e:
+        return f"⚠️ Gemini error: {e}"
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _build_context(rows, limit=150) -> str:
+    """Format DB rows into a compact event log string for the LLM."""
+    lines = []
+    for ts_str, event in rows[:limit]:
+        # Shorten ISO timestamp → HH:MM:SS for readability
+        try:
+            dt = datetime.fromisoformat(ts_str)
+            ts_label = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            ts_label = ts_str
+        lines.append(f"[{ts_label}] {event}")
+    return "\n".join(lines) if lines else "(no events recorded yet)"
+
 
 def _topic_keyword(q: str) -> str | None:
     """Return the DB search keyword that best matches the question."""
@@ -91,13 +133,14 @@ def _duration_between(rows, start_event_kw, end_event_kw):
 
 # ── Main interface ────────────────────────────────────────────────────────────
 
-def answer(question: str, db) -> dict:
+def answer(question: str, db, api_key: str = "") -> dict:
     """
     Returns a dict:
       {
         "answer": str,          # the direct natural-language answer
         "rows":   list[tuple],  # (timestamp, event) rows to display (may be [])
         "count":  int | None,   # if a count was computed
+        "used_ai": bool,        # True if Gemini was called
       }
     """
     q = question.lower()
@@ -127,7 +170,7 @@ def answer(question: str, db) -> dict:
             answer_text = f"**1 time** — {subject}{time_range_str}."
         else:
             answer_text = f"**{count} times** — {subject}{time_range_str}."
-        return {"answer": answer_text, "rows": topic_rows, "count": count}
+        return {"answer": answer_text, "rows": topic_rows, "count": count, "used_ai": False}
 
     # ── Intent: LAST SEEN ────────────────────────────────────────────────────
     if any(w in q for w in ["when did", "last time", "last seen", "when was", "when were"]):
@@ -136,13 +179,12 @@ def answer(question: str, db) -> dict:
             answer_text = f"Last event: **{event}** at **{ts}**"
         else:
             answer_text = f"No matching events found{time_range_str}."
-        return {"answer": answer_text, "rows": topic_rows[:10], "count": None}
+        return {"answer": answer_text, "rows": topic_rows[:10], "count": None, "used_ai": False}
 
     # ── Intent: DURATION ─────────────────────────────────────────────────────
     if any(w in q for w in ["how long", "duration", "total time"]):
         periods = _duration_between(all_recent, "arrived", "ended")
         if start_dt and end_dt:
-            # only periods that overlap the range
             periods = _duration_between(topic_rows, "arrived", "ended")
         if periods:
             total = sum(periods)
@@ -153,13 +195,23 @@ def answer(question: str, db) -> dict:
             )
         else:
             answer_text = f"Not enough data to calculate duration{time_range_str}."
-        return {"answer": answer_text, "rows": topic_rows[:20], "count": None}
+        return {"answer": answer_text, "rows": topic_rows[:20], "count": None, "used_ai": False}
 
-    # ── Default: show recent matching events ─────────────────────────────────
-    display = topic_rows[:20]
-    if display:
-        ts, event = display[0]
-        answer_text = f"Latest: **{event}** at **{ts}**{time_range_str}"
-    else:
-        answer_text = f"No matching events found{time_range_str}."
-    return {"answer": answer_text, "rows": display, "count": None}
+    # ── Fallback: Gemini AI ───────────────────────────────────────────────────
+    context_text = _build_context(all_recent)
+
+    if not api_key:
+        # No key — give best-effort plain answer from the data
+        display = topic_rows[:20]
+        if display:
+            ts, event = display[0]
+            answer_text = f"Latest: **{event}** at **{ts}**{time_range_str}"
+        else:
+            answer_text = (
+                f"No matching events found{time_range_str}. "
+                "💡 Add a Gemini API key in the sidebar to enable AI answers for complex questions."
+            )
+        return {"answer": answer_text, "rows": display, "count": None, "used_ai": False}
+
+    ai_answer = _gemini_answer(question, context_text, api_key)
+    return {"answer": ai_answer, "rows": topic_rows[:20], "count": None, "used_ai": True}

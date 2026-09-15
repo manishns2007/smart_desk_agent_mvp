@@ -13,6 +13,34 @@ st.set_page_config(page_title="Smart Desk Agent", layout="wide")
 st.title("🧠 Smart Desk / Productivity Agent")
 st.caption("Laptop camera → vision → event memory → natural-language queries")
 
+# ── Sidebar: Gemini API Key ───────────────────────────────────────────────────
+
+with st.sidebar:
+    st.header("⚙️ Settings")
+    api_key = st.text_input(
+        "Gemini API Key",
+        type="password",
+        placeholder="AIza...",
+        help="Get a free key at https://aistudio.google.com/app/apikey",
+    )
+    if api_key:
+        st.success("✅ Gemini AI enabled — ask anything!")
+    else:
+        st.info(
+            "💡 **No API key set.**\n\n"
+            "Structured queries (counts, last-seen, durations) work without a key.\n"
+            "For freeform AI answers, enter your Gemini API key above."
+        )
+    st.divider()
+    st.markdown(
+        "**Example questions**\n"
+        "- How many times did I leave today?\n"
+        "- When did I last use my phone?\n"
+        "- Was I productive this morning?\n"
+        "- What was I doing around 10am?\n"
+        "- How long was I at my desk?"
+    )
+
 # ── Singletons: survive across Streamlit reruns ──────────────────────────────
 
 @st.cache_resource
@@ -99,7 +127,15 @@ with col2:
     )
 
     if question:
-        result = agent_answer(question, db)
+        with st.spinner("Thinking…"):
+            result = agent_answer(question, db, api_key=api_key)
+
+        # Badge to show whether AI was used
+        if result.get("used_ai"):
+            st.caption("🤖 Answered by Gemini AI")
+        else:
+            st.caption("⚡ Answered by fast rule engine")
+
         st.success(result["answer"])
 
         if result["rows"]:
