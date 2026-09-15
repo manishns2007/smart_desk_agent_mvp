@@ -19,9 +19,10 @@ from datetime import datetime, date
 def _gemini_answer(question: str, context_text: str, api_key: str) -> str:
     """Send question + event context to Gemini and return the answer string."""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
 
         system_prompt = (
             "You are a smart desk monitoring assistant. "
@@ -33,10 +34,16 @@ def _gemini_answer(question: str, context_text: str, api_key: str) -> str:
             f"{context_text}"
         )
 
-        response = model.generate_content(f"{system_prompt}\n\nQuestion: {question}")
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=question,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+            ),
+        )
         return response.text.strip()
     except ImportError:
-        return "⚠️ google-generativeai is not installed. Run: pip install google-generativeai"
+        return "⚠️ google-genai is not installed. Run: pip install google-genai"
     except Exception as e:
         return f"⚠️ Gemini error: {e}"
 
